@@ -133,7 +133,7 @@ namespace Jint
         // temporary state for realm so that we can easily pass it to functions while still not
         // having a proper execution context established
         internal Realm? _realmInConstruction;
-
+        
         public Realm Realm => _realmInConstruction ?? ExecutionContext.Realm;
 
         internal GlobalSymbolRegistry GlobalSymbolRegistry { get; } = new();
@@ -312,7 +312,14 @@ namespace Jint
                 Completion result;
                 try
                 {
-                    result = list.Execute(_activeEvaluationContext!);
+                    var enumerator = list.GetEnumerator(_activeEvaluationContext!);
+
+                    while (enumerator.MoveNext())
+                    {
+                        // TODO: Break if an await statement has been hit
+                    }
+            
+                    result = enumerator.Current;
                 }
                 catch
                 {

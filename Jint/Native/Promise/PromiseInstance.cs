@@ -36,8 +36,7 @@ namespace Jint.Native.Promise
         Action<JsValue> Reject
     );
 
-
-    internal sealed class PromiseInstance : ObjectInstance
+internal sealed class PromiseInstance : ObjectInstance
     {
         internal PromiseState State { get; private set; }
 

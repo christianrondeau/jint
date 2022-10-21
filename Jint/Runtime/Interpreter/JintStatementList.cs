@@ -1,6 +1,4 @@
 using Esprima.Ast;
-using Jint.Native;
-using Jint.Native.Error;
 using Jint.Runtime.Environments;
 using Jint.Runtime.Interpreter.Statements;
 
@@ -8,18 +6,16 @@ namespace Jint.Runtime.Interpreter
 {
     internal sealed class JintStatementList
     {
-        private sealed class Pair
-        {
-            internal JintStatement Statement = null!;
-            internal Completion? Value;
-        }
-
+        internal sealed record FastResolvedJintStatement(
+            JintStatement Statement,
+            Completion? FastResolvedValue
+        );
+        
         private readonly Statement? _statement;
         private readonly NodeList<Statement> _statements;
 
-        private Pair[]? _jintStatements;
+        private FastResolvedJintStatement[]? _jintStatements;
         private bool _initialized;
-        private uint _index;
         private readonly bool _generator;
 
         public JintStatementList(IFunction function)
@@ -46,24 +42,23 @@ namespace Jint.Runtime.Interpreter
 
         private void Initialize(EvaluationContext context)
         {
-            var jintStatements = new Pair[_statements.Count];
+            var jintStatements = new FastResolvedJintStatement[_statements.Count];
             for (var i = 0; i < jintStatements.Length; i++)
             {
                 var esprimaStatement = _statements[i];
                 var statement = JintStatement.Build(esprimaStatement);
                 // When in debug mode, don't do FastResolve: Stepping requires each statement to be actually executed.
                 var value = context.DebugMode ? null : JintStatement.FastResolve(esprimaStatement);
-                jintStatements[i] = new Pair
-                {
-                    Statement = statement,
-                    Value = value
-                };
+                jintStatements[i] = new FastResolvedJintStatement(
+                    Statement: statement,
+                    FastResolvedValue: value
+                );
             }
 
             _jintStatements = jintStatements;
         }
 
-        public Completion Execute(EvaluationContext context)
+        public IJintStatementListEnumerator GetEnumerator(EvaluationContext context)
         {
             if (!_initialized)
             {
@@ -77,82 +72,19 @@ namespace Jint.Runtime.Interpreter
                 context.RunBeforeExecuteStatementChecks(_statement);
             }
 
-            JintStatement? s = null;
-            Completion c = default;
-            Completion sl = c;
-
-            // The value of a StatementList is the value of the last value-producing item in the StatementList
-            JsValue? lastValue = null;
-            try
-            {
-                foreach (var pair in _jintStatements!)
-                {
-                    s = pair.Statement;
-                    c = pair.Value.GetValueOrDefault();
-                    if (c.Value is null)
-                    {
-                        c = s.Execute(context);
-                    }
-
-                    if (c.Type != CompletionType.Normal)
-                    {
-                        return new Completion(c.Type, c.Value ?? sl.Value!, c._source);
-                    }
-                    sl = c;
-                    if (c.Value is not null)
-                    {
-                        lastValue = c.Value;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                if (ex is JintException)
-                {
-                    return HandleException(context, ex, s);
-                }
-
-                throw;
-            }
-
-            return new Completion(c.Type, lastValue ?? JsValue.Undefined, c._source!);
+            return new JintStatementListEnumerator(_jintStatements!, context);
         }
 
-        private static Completion HandleException(EvaluationContext context, Exception exception, JintStatement? s)
+        //TODO: This method should be removed once all callers have migrated
+        public Completion Execute(EvaluationContext context)
         {
-            if (exception is JavaScriptException javaScriptException)
-            {
-                return CreateThrowCompletion(s, javaScriptException);
-            }
-            if (exception is TypeErrorException typeErrorException)
-            {
-                var node = typeErrorException.Node ?? s!._statement;
-                return CreateThrowCompletion(context.Engine.Realm.Intrinsics.TypeError, typeErrorException, node);
-            }
-            if (exception is RangeErrorException rangeErrorException)
-            {
-                return CreateThrowCompletion(context.Engine.Realm.Intrinsics.RangeError, rangeErrorException, s!._statement);
-            }
+            var enumerator = GetEnumerator(context);
 
-            // should not happen unless there's problem in the engine
-            throw exception;
-        }
-
-        private static Completion CreateThrowCompletion(ErrorConstructor errorConstructor, Exception e, SyntaxElement s)
-        {
-            var error = errorConstructor.Construct(e.Message);
-            return new Completion(CompletionType.Throw, error, s);
-        }
-
-        private static Completion CreateThrowCompletion(JintStatement? s, JavaScriptException v)
-        {
-            SyntaxElement source = s!._statement;
-            if (v.Location != default)
+            while (enumerator.MoveNext())
             {
-                source = EsprimaExtensions.CreateLocationNode(v.Location);
             }
-
-            return new Completion(CompletionType.Throw, v.Error, source);
+            
+            return enumerator.Current;
         }
 
         /// <summary>
